@@ -37,15 +37,13 @@
                  (trusted (find-if (lambda (a) (= (compute-key-tag a) key-tag)) anchors)))
             (unless trusted
               ;; Try DS validation from parent
-              (let* ((parent (subseq signer (1+ (or (position #\. signer) 0))))
-                     (ds-resp (resolve resolver signer :ds))
+              (let* ((ds-resp (resolve resolver signer :ds))
                      (ds-records (when ds-resp
                                    (remove-if-not (lambda (rr) (eq :ds (rr-type rr)))
                                                   (message-answers ds-resp)))))
                 (unless (some (lambda (ds-rr)
                                 (verify-ds (rr-rdata ds-rr) kdata signer))
                               ds-records)
-                  (declare (ignore parent))
                   (return-from validate-dnssec :bogus))))
             ;; Verify the signature
             (unless (verify-rrsig sig-data kdata rrset)

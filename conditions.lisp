@@ -1,5 +1,11 @@
 (in-package #:cl-dns)
 
+(define-condition dns-error (error)
+  ((message :initarg :message :reader dns-error-message)
+   (rcode :initarg :rcode :initform nil :reader dns-error-rcode))
+  (:report (lambda (c s) (format s "DNS error~@[ (rcode ~D)~]: ~A"
+                                  (dns-error-rcode c) (dns-error-message c))))
+  (:documentation "DNS error condition base class."))
 (define-condition dns-nxdomain (dns-error)
   ((name :initarg :name :reader dns-nxdomain-name))
   (:default-initargs :message "name does not exist" :rcode 3)
@@ -12,9 +18,3 @@
   ((nameserver :initarg :nameserver :reader dns-timeout-nameserver))
   (:default-initargs :message "query timed out")
   (:documentation "Signalled when a DNS query times out."))
-(define-condition dns-error (error)
-  ((message :initarg :message :reader dns-error-message)
-   (rcode :initarg :rcode :initform nil :reader dns-error-rcode))
-  (:report (lambda (c s) (format s "DNS error~@[ (rcode ~D)~]: ~A"
-                                  (dns-error-rcode c) (dns-error-message c))))
-  (:documentation "DNS error condition base class."))
