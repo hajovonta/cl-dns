@@ -1,5 +1,3 @@
-;;;; package.lisp
-
 (defpackage #:cl-dns
   (:use #:cl)
   (:export

@@ -2,8 +2,6 @@
 
 **Functions:** 8
 
-**Depends on:** protocol
-
 ## Contents
 
 - `cache-evict-lru`

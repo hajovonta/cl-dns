@@ -2,8 +2,6 @@
 
 **Functions:** 4
 
-**Depends on:** pool, protocol
-
 ## Contents
 
 - `send-query`

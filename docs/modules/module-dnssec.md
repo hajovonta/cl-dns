@@ -2,8 +2,6 @@
 
 **Functions:** 10
 
-**Depends on:** resolver, protocol
-
 ## Contents
 
 - `add-trust-anchor`

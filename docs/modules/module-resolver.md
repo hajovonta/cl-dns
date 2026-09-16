@@ -2,8 +2,6 @@
 
 **Functions:** 7
 
-**Depends on:** cache, protocol
-
 ## Contents
 
 - `happy-eyeballs`

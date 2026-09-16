@@ -2,8 +2,6 @@
 
 **Functions:** 3
 
-**Depends on:** dnssec, protocol
-
 ## Contents
 
 - `decode-nsec`

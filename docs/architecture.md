@@ -5,19 +5,19 @@
 
 ## Module Dependency Graph
 
-- **cache** → protocol
+- **cache** (no dependencies)
 - **conditions** (no dependencies)
 - **dedup** (no dependencies)
-- **dnssec** → resolver, protocol
-- **doh** → protocol
-- **dot** → protocol
-- **dynamic** → protocol
-- **iterative** → cache, protocol
-- **mdns** → protocol
-- **nsec** → dnssec, protocol
+- **dnssec** (no dependencies)
+- **doh** (no dependencies)
+- **dot** (no dependencies)
+- **dynamic** (no dependencies)
+- **iterative** (no dependencies)
+- **mdns** (no dependencies)
+- **nsec** (no dependencies)
 - **pool** (no dependencies)
 - **protocol** (no dependencies)
-- **resolver** → cache, protocol
-- **transport** → pool, protocol
-- **tsig** → protocol
+- **resolver** (no dependencies)
+- **transport** (no dependencies)
+- **tsig** (no dependencies)
 

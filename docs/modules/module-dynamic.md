@@ -2,8 +2,6 @@
 
 **Functions:** 4
 
-**Depends on:** protocol
-
 ## Contents
 
 - `dns-update`

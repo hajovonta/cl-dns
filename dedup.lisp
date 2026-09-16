@@ -1,5 +1,9 @@
 (in-package #:cl-dns)
 
+(defclass query-deduplicator ()
+  ((in-flight :initform (make-hash-table :test 'equal) :accessor dedup-in-flight)
+   (lock :initform (bt:make-lock "dedup") :accessor dedup-lock))
+  (:documentation "Query deduplication table tracking in-flight queries."))
 (defun deduplicate-query (deduper name type thunk)
   "Collapse identical in-flight queries into one, returning the same result to all waiters."
   (let ((key (cons (string-downcase name) type)))
@@ -23,7 +27,3 @@
           (remhash key (dedup-in-flight deduper)))
         (bt:release-lock result-lock)
         result))))
-(defclass query-deduplicator ()
-  ((in-flight :initform (make-hash-table :test 'equal) :accessor dedup-in-flight)
-   (lock :initform (bt:make-lock "dedup") :accessor dedup-lock))
-  (:documentation "Query deduplication table tracking in-flight queries."))

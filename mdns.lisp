@@ -1,13 +1,5 @@
 (in-package #:cl-dns)
 
-(defun discover-services (service-type &key (timeout 3))
-  "Discover services via DNS-SD (browse for _type._tcp.local)."
-  (let* ((browse-name (format nil "~A.local" service-type))
-         (resp (mdns-query browse-name :ptr :timeout timeout)))
-    (when resp
-      (mapcar (lambda (rr) (rr-rdata rr))
-              (remove-if-not (lambda (rr) (eq (rr-type rr) :ptr))
-                             (message-answers resp))))))
 (defun mdns-query (name type &key (timeout 3))
   "Send an mDNS query on the local multicast group (224.0.0.251:5353)."
   (let* ((query (make-query name type :recursion-desired nil))
@@ -26,3 +18,11 @@
               (declare (ignore recv))
               (when n (decode-message (subseq buf 0 n))))))
       (usocket:socket-close socket))))
+(defun discover-services (service-type &key (timeout 3))
+  "Discover services via DNS-SD (browse for _type._tcp.local)."
+  (let* ((browse-name (format nil "~A.local" service-type))
+         (resp (mdns-query browse-name :ptr :timeout timeout)))
+    (when resp
+      (mapcar (lambda (rr) (rr-rdata rr))
+              (remove-if-not (lambda (rr) (eq (rr-type rr) :ptr))
+                             (message-answers resp))))))

@@ -1,28 +1,5 @@
 (in-package #:cl-dns)
 
-(defun verify-denial (name type nsec-records)
-  "Verify authenticated denial of existence using NSEC/NSEC3 records."
-  (let ((type-num (or (cdr (assoc type *record-types*)) type)))
-    (dolist (rr nsec-records)
-      (let ((data (rr-rdata rr)))
-        (when (listp data)
-          (cond
-            ;; NSEC: check if name falls in gap and type is not in bitmap
-            ((and (getf data :next-domain) (getf data :types))
-             (let ((owner (string-downcase (rr-name rr)))
-                   (next (string-downcase (getf data :next-domain)))
-                   (qname (string-downcase name)))
-               (when (and (string>= qname owner)
-                          (or (string< qname next)
-                              (string< next owner))) ; wrap-around
-                 (unless (member type-num (getf data :types))
-                   (return-from verify-denial t)))))
-            ;; NSEC3: check hashed name is covered
-            ((getf data :next-hashed)
-             ;; Simplified: if type not in bitmap, denial is valid
-             (unless (member type-num (getf data :types))
-               (return-from verify-denial t)))))))
-    nil))
 (defun decode-nsec3 (buffer offset rdlength)
   "Parse NSEC3 RDATA (algorithm, flags, iterations, salt, next-hashed, type bitmaps)."
   (let* ((algorithm (aref buffer offset))
@@ -66,3 +43,26 @@
                                 do (push (+ (* window 256) (* i 8) (- 7 bit)) types)))
                  (incf bitmap-start blen)))
       (list :next-domain next-domain :types (nreverse types)))))
+(defun verify-denial (name type nsec-records)
+  "Verify authenticated denial of existence using NSEC/NSEC3 records."
+  (let ((type-num (or (cdr (assoc type *record-types*)) type)))
+    (dolist (rr nsec-records)
+      (let ((data (rr-rdata rr)))
+        (when (listp data)
+          (cond
+            ;; NSEC: check if name falls in gap and type is not in bitmap
+            ((and (getf data :next-domain) (getf data :types))
+             (let ((owner (string-downcase (rr-name rr)))
+                   (next (string-downcase (getf data :next-domain)))
+                   (qname (string-downcase name)))
+               (when (and (string>= qname owner)
+                          (or (string< qname next)
+                              (string< next owner))) ; wrap-around
+                 (unless (member type-num (getf data :types))
+                   (return-from verify-denial t)))))
+            ;; NSEC3: check hashed name is covered
+            ((getf data :next-hashed)
+             ;; Simplified: if type not in bitmap, denial is valid
+             (unless (member type-num (getf data :types))
+               (return-from verify-denial t)))))))
+    nil))

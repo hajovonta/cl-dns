@@ -1,25 +1,29 @@
-;;;; cl-dns.asd
-
-(asdf:defsystem #:cl-dns
-  :description "Async DNS resolver with DNS-over-HTTPS and DNS-over-TLS support."
+(asdf:defsystem "cl-dns"
   :author "Hajovonta"
   :license "MIT"
-  :version "0.1.0"
-  :serial t
-  :depends-on (#:bordeaux-threads #:bordeaux-threads #:cl+ssl #:cl+ssl #:dexador #:dexador #:flexi-streams #:flexi-streams #:ironclad #:ironclad #:split-sequence #:split-sequence #:usocket #:usocket)
+  :description "Async DNS resolver with DoH, DoT, DNSSEC, mDNS/DNS-SD, TSIG, and dynamic updates."
+  :depends-on (#:bordeaux-threads
+               #:cl+ssl
+               #:cl-crypto-util
+               #:dexador
+               #:flexi-streams
+               #:ironclad
+               #:split-sequence
+               #:usocket)
   :components ((:file "package")
                (:file "protocol")
-               (:file "cache")
-               (:file "resolver")
-               (:file "doh")
-               (:file "dot")
-               (:file "mdns")
+               (:file "dynamic")
                (:file "dnssec")
                (:file "iterative")
-               (:file "dynamic")
                (:file "pool")
-               (:file "conditions")
-               (:file "transport")
-               (:file "tsig")
+               (:file "cache")
+               (:file "resolver")
                (:file "nsec")
-               (:file "dedup")))
+               (:file "mdns")
+               (:file "transport")
+               (:file "dot")
+               (:file "dedup")
+               (:file "conditions")
+               (:file "doh")
+               (:file "tsig")
+))

@@ -1,5 +1,31 @@
 (in-package #:cl-dns)
 
+(defun make-update-message (zone updates)
+  "Build a DNS UPDATE message (RFC 2136) from a zone and list of update operations.
+Each update is a plist (:op :add/:delete, :name, :type, :ttl, :rdata)."
+  (let ((msg (make-instance 'dns-message)))
+    ;; Header: opcode=5 (UPDATE)
+    (setf (header-opcode (message-header msg)) 5
+          (header-qdcount (message-header msg)) 1)
+    ;; Zone section (stored as question)
+    (setf (message-questions msg)
+          (list (make-instance 'dns-question :qname zone :qtype :soa :qclass :in)))
+    ;; Update section (stored as authority)
+    (let ((update-rrs nil))
+      (dolist (u updates)
+        (let ((op (getf u :op))
+              (name (getf u :name))
+              (type (getf u :type))
+              (ttl (or (getf u :ttl) 0))
+              (rdata (getf u :rdata)))
+          (push (make-instance 'dns-rr
+                  :name name :type type
+                  :class (if (eq op :delete) :none :in)
+                  :ttl ttl :rdata rdata)
+                update-rrs)))
+      (setf (message-authority msg) (nreverse update-rrs))
+      (setf (header-nscount (message-header msg)) (length updates)))
+    msg))
 (defun zone-transfer (nameserver zone &key (timeout 30) (port 53))
   "Perform a full zone transfer (AXFR) from a nameserver. Returns list of RRs."
   (let* ((query (make-query zone :any))
@@ -42,33 +68,6 @@
          (resp-bytes (send-query-tcp nameserver bytes :timeout timeout :port port))
          (resp (decode-message resp-bytes)))
     (values resp (header-rcode (message-header resp)))))
-(defun make-update-message (zone updates)
-  "Build a DNS UPDATE message (RFC 2136) from a zone and list of update operations.
-Each update is a plist (:op :add/:delete, :name, :type, :ttl, :rdata)."
-  (let ((msg (make-instance 'dns-message)))
-    ;; Header: opcode=5 (UPDATE)
-    (setf (header-opcode (message-header msg)) 5
-          (header-qdcount (message-header msg)) 1)
-    ;; Zone section (stored as question)
-    (setf (message-questions msg)
-          (list (make-instance 'dns-question :qname zone :qtype :soa :qclass :in)))
-    ;; Update section (stored as authority)
-    (let ((update-rrs nil))
-      (dolist (u updates)
-        (let ((op (getf u :op))
-              (name (getf u :name))
-              (type (getf u :type))
-              (ttl (or (getf u :ttl) 0))
-              (rdata (getf u :rdata)))
-          (push (make-instance 'dns-rr
-                  :name name :type type
-                  :class (if (eq op :delete) :none :in)
-                  :ttl ttl :rdata rdata)
-                update-rrs)))
-      (setf (message-authority msg) (nreverse update-rrs))
-      (setf (header-nscount (message-header msg)) (length updates)))
-    msg))
-
 (defun zone-transfer-incremental (nameserver zone serial &key (timeout 30) (port 53))
   "Perform an incremental zone transfer (IXFR) from a nameserver. Returns list of add/delete changes."
   (let* ((query (make-query zone :soa))

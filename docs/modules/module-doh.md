@@ -2,8 +2,6 @@
 
 **Functions:** 1
 
-**Depends on:** protocol
-
 ## Contents
 
 - `doh-query`

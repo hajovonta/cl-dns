@@ -1,18 +1,192 @@
 (in-package #:cl-dns)
 
+(defclass dns-rr ()
+  ((name :initarg :name :accessor rr-name)
+   (type :initarg :type :accessor rr-type)
+   (class :initarg :class :accessor rr-class :initform :in)
+   (ttl :initarg :ttl :accessor rr-ttl :initform 0)
+   (rdata :initarg :rdata :accessor rr-rdata))
+  (:documentation "DNS resource record (name, type, class, TTL, rdata)."))
+(defclass dns-question ()
+  ((qname :initarg :qname :accessor question-qname)
+   (qtype :initarg :qtype :accessor question-qtype)
+   (qclass :initarg :qclass :accessor question-qclass :initform :in))
+  (:documentation "DNS question section entry (name, type, class)."))
+(defclass dns-header ()
+  ((id :initarg :id :accessor header-id :initform (random 65536))
+   (qr :initarg :qr :accessor header-qr :initform 0)
+   (opcode :initarg :opcode :accessor header-opcode :initform 0)
+   (aa :initarg :aa :accessor header-aa :initform 0)
+   (tc :initarg :tc :accessor header-tc :initform 0)
+   (rd :initarg :rd :accessor header-rd :initform 1)
+   (ra :initarg :ra :accessor header-ra :initform 0)
+   (rcode :initarg :rcode :accessor header-rcode :initform 0)
+   (qdcount :initarg :qdcount :accessor header-qdcount :initform 0)
+   (ancount :initarg :ancount :accessor header-ancount :initform 0)
+   (nscount :initarg :nscount :accessor header-nscount :initform 0)
+   (arcount :initarg :arcount :accessor header-arcount :initform 0))
+  (:documentation "DNS message header (ID, flags, counts)."))
+(defclass dns-message ()
+  ((header :initarg :header :accessor message-header :initform (make-instance 'dns-header))
+   (questions :initarg :questions :accessor message-questions :initform nil)
+   (answers :initarg :answers :accessor message-answers :initform nil)
+   (authority :initarg :authority :accessor message-authority :initform nil)
+   (additional :initarg :additional :accessor message-additional :initform nil))
+  (:documentation "Complete DNS message: header, questions, answers, authority, additional sections."))
+(defparameter *class-codes*
+  '((:in . 1) (:ch . 3) (:hs . 4) (:any . 255))
+  "Mappings between DNS class keywords and their numeric codes.")
 (defparameter *rcode-names*
   '((0 . :noerror) (1 . :formerr) (2 . :servfail) (3 . :nxdomain)
     (4 . :notimp) (5 . :refused) (6 . :yxdomain) (7 . :yxrrset)
     (8 . :nxrrset) (9 . :notauth))
   "Mappings between DNS RCODE numeric codes and their keywords.")
-(defparameter *class-codes*
-  '((:in . 1) (:ch . 3) (:hs . 4) (:any . 255))
-  "Mappings between DNS class keywords and their numeric codes.")
 (defparameter *record-types*
   '((:a . 1) (:ns . 2) (:cname . 5) (:soa . 6) (:ptr . 12) (:mx . 15)
     (:txt . 16) (:aaaa . 28) (:srv . 33) (:naptr . 35) (:opt . 41)
     (:ds . 43) (:rrsig . 46) (:dnskey . 48) (:any . 255))
   "Mappings between DNS record type keywords and their numeric codes.")
+(defun decode-name (buffer offset)
+  "Decode a domain name from a DNS packet buffer, following compression pointers."
+  (let ((parts nil)
+        (jumped nil)
+        (return-offset offset))
+    (loop
+      (let ((len (aref buffer offset)))
+        (cond
+          ((zerop len)
+           (incf offset)
+           (unless jumped (setf return-offset offset))
+           (return))
+          ((= (logand len #xC0) #xC0)
+           (let ((ptr (logior (ash (logand len #x3F) 8) (aref buffer (1+ offset)))))
+             (unless jumped
+               (setf return-offset (+ offset 2)))
+             (setf offset ptr jumped t)))
+          (t
+           (incf offset)
+           (push (map 'string #'code-char (subseq buffer offset (+ offset len))) parts)
+           (incf offset len)))))
+    (values (format nil "~{~A~^.~}" (nreverse parts)) return-offset)))
+(defun decode-rdata (type buffer offset rdlength)
+  "Decode RDATA from buffer based on record type."
+  (case type
+    (:a (format nil "~D.~D.~D.~D"
+                (aref buffer offset) (aref buffer (+ offset 1))
+                (aref buffer (+ offset 2)) (aref buffer (+ offset 3))))
+    (:aaaa (format nil "~{~(~4,'0X~)~^:~}"
+                   (loop for i from 0 below 8
+                         collect (logior (ash (aref buffer (+ offset (* i 2))) 8)
+                                         (aref buffer (+ offset (* i 2) 1))))))
+    ((:ns :cname :ptr) (decode-name buffer offset))
+    (:mx (list (logior (ash (aref buffer offset) 8) (aref buffer (+ offset 1)))
+               (decode-name buffer (+ offset 2))))
+    (:srv (list :priority (logior (ash (aref buffer offset) 8) (aref buffer (+ offset 1)))
+                :weight (logior (ash (aref buffer (+ offset 2)) 8) (aref buffer (+ offset 3)))
+                :port (logior (ash (aref buffer (+ offset 4)) 8) (aref buffer (+ offset 5)))
+                :target (decode-name buffer (+ offset 6))))
+    (:txt (let ((pos offset) (end (+ offset rdlength)) (parts nil))
+            (loop while (< pos end) do
+              (let ((tlen (aref buffer pos)))
+                (incf pos)
+                (push (map 'string #'code-char (subseq buffer pos (+ pos tlen))) parts)
+                (incf pos tlen)))
+            (nreverse parts)))
+    (:rrsig (decode-rrsig buffer offset rdlength))
+    (:dnskey (decode-dnskey buffer offset rdlength))
+    (:ds (decode-ds buffer offset rdlength))
+    (t (subseq buffer offset (+ offset rdlength)))))
+(defun encode-name (name buffer offset &optional compression-table)
+  "Encode a domain name using DNS label compression into a buffer."
+  (declare (ignore compression-table))
+  (let ((labels (split-sequence:split-sequence #\. name :remove-empty-subseqs t)))
+    (dolist (label labels)
+      (let ((len (length label)))
+        (setf (aref buffer offset) len)
+        (incf offset)
+        (loop for ch across label do
+          (setf (aref buffer offset) (char-code ch))
+          (incf offset))))
+    (setf (aref buffer offset) 0)
+    (incf offset)
+    offset))
+(defun encode-rdata (type rdata buffer offset)
+  "Encode RDATA for a given record type into bytes."
+  (case type
+    (:a (let ((parts (mapcar #'parse-integer (split-sequence:split-sequence #\. rdata))))
+          (loop for byte in parts for i from 0 do (setf (aref buffer (+ offset i)) byte))
+          (+ offset 4)))
+    (:aaaa (loop for i from 0 below 8
+                 for word = (parse-integer rdata :start (* i 5) :end (+ (* i 5) 4) :radix 16)
+                 do (setf (aref buffer (+ offset (* i 2))) (ash word -8)
+                          (aref buffer (+ offset (* i 2) 1)) (logand word #xFF))
+                 finally (return (+ offset 16))))
+    ((:ns :cname :ptr) (encode-name rdata buffer offset))
+    (t (loop for i from 0 below (length rdata)
+             do (setf (aref buffer (+ offset i)) (if (integerp (elt rdata i))
+                                                      (elt rdata i)
+                                                      (char-code (elt rdata i))))
+             finally (return (+ offset (length rdata)))))))
+(defun encode-name-compressed (name buffer offset compression-table)
+  "Encode a domain name with pointer-based compression, deduplicating repeated suffixes."
+  (let ((labels (split-sequence:split-sequence #\. name :remove-empty-subseqs t)))
+    (loop for tail on labels
+          for suffix = (format nil "~{~A~^.~}" tail)
+          for existing = (gethash suffix compression-table)
+          do (when existing
+               ;; Write compression pointer
+               (setf (aref buffer offset) (logior #xC0 (ash existing -8))
+                     (aref buffer (1+ offset)) (logand existing #xFF))
+               (return-from encode-name-compressed (+ offset 2)))
+             ;; Record position for this suffix
+             (setf (gethash suffix compression-table) offset)
+             ;; Write label
+             (let ((label (first tail)))
+               (setf (aref buffer offset) (length label))
+               (incf offset)
+               (loop for ch across label do
+                 (setf (aref buffer offset) (char-code ch))
+                 (incf offset))))
+    ;; Null terminator
+    (setf (aref buffer offset) 0)
+    (1+ offset)))
+(defun decode-edns-options (rdata)
+  "Parse EDNS0 options from OPT record RDATA. Returns alist of (code . data) pairs."
+  (when (and rdata (> (length rdata) 0))
+    (let ((pos 0) (options nil))
+      (loop while (< (+ pos 4) (length rdata))
+            do (let ((code (logior (ash (aref rdata pos) 8) (aref rdata (+ pos 1))))
+                     (len (logior (ash (aref rdata (+ pos 2)) 8) (aref rdata (+ pos 3)))))
+                 (incf pos 4)
+                 (push (cons code (subseq rdata pos (+ pos len))) options)
+                 (incf pos len)))
+      (nreverse options))))
+(defun encode-edns-options (options)
+  "Encode EDNS0 options into an OPT record's RDATA.
+OPTIONS is an alist of (code . data-bytes)."
+  (let* ((total (loop for opt in options
+                      sum (+ 4 (length (cdr opt)))))
+         (buf (make-array total :element-type '(unsigned-byte 8) :initial-element 0))
+         (pos 0))
+    (dolist (opt options)
+      (let ((code (car opt))
+            (data (cdr opt)))
+        (setf (aref buf pos) (ash code -8)
+              (aref buf (+ pos 1)) (logand code #xFF)
+              (aref buf (+ pos 2)) (ash (length data) -8)
+              (aref buf (+ pos 3)) (logand (length data) #xFF))
+        (incf pos 4)
+        (replace buf data :start1 pos)
+        (incf pos (length data))))
+    buf))
+(defun make-opt-rr (&key (udp-size 4096) (do-bit nil))
+  "Build an EDNS0 OPT pseudo-record for inclusion in the additional section."
+  (make-instance 'dns-rr
+    :name ""
+    :type :opt
+    :class udp-size
+    :ttl (if do-bit #x8000 0)
+    :rdata #()))
 (defun decode-message (bytes)
   "Decode a DNS message from a byte vector received from the wire."
   (let* ((buf (coerce bytes '(simple-array (unsigned-byte 8) (*))))
@@ -143,154 +317,6 @@
                 (setf (aref buf rdlen-pos) (ash rdlen -8)
                       (aref buf (1+ rdlen-pos)) (logand rdlen #xFF)))))))
     (subseq buf 0 offset)))
-(defun decode-rdata (type buffer offset rdlength)
-  "Decode RDATA from buffer based on record type."
-  (case type
-    (:a (format nil "~D.~D.~D.~D"
-                (aref buffer offset) (aref buffer (+ offset 1))
-                (aref buffer (+ offset 2)) (aref buffer (+ offset 3))))
-    (:aaaa (format nil "~{~(~4,'0X~)~^:~}"
-                   (loop for i from 0 below 8
-                         collect (logior (ash (aref buffer (+ offset (* i 2))) 8)
-                                         (aref buffer (+ offset (* i 2) 1))))))
-    ((:ns :cname :ptr) (decode-name buffer offset))
-    (:mx (list (logior (ash (aref buffer offset) 8) (aref buffer (+ offset 1)))
-               (decode-name buffer (+ offset 2))))
-    (:srv (list :priority (logior (ash (aref buffer offset) 8) (aref buffer (+ offset 1)))
-                :weight (logior (ash (aref buffer (+ offset 2)) 8) (aref buffer (+ offset 3)))
-                :port (logior (ash (aref buffer (+ offset 4)) 8) (aref buffer (+ offset 5)))
-                :target (decode-name buffer (+ offset 6))))
-    (:txt (let ((pos offset) (end (+ offset rdlength)) (parts nil))
-            (loop while (< pos end) do
-              (let ((tlen (aref buffer pos)))
-                (incf pos)
-                (push (map 'string #'code-char (subseq buffer pos (+ pos tlen))) parts)
-                (incf pos tlen)))
-            (nreverse parts)))
-    (:rrsig (decode-rrsig buffer offset rdlength))
-    (:dnskey (decode-dnskey buffer offset rdlength))
-    (:ds (decode-ds buffer offset rdlength))
-    (t (subseq buffer offset (+ offset rdlength)))))
-(defun encode-rdata (type rdata buffer offset)
-  "Encode RDATA for a given record type into bytes."
-  (case type
-    (:a (let ((parts (mapcar #'parse-integer (split-sequence:split-sequence #\. rdata))))
-          (loop for byte in parts for i from 0 do (setf (aref buffer (+ offset i)) byte))
-          (+ offset 4)))
-    (:aaaa (loop for i from 0 below 8
-                 for word = (parse-integer rdata :start (* i 5) :end (+ (* i 5) 4) :radix 16)
-                 do (setf (aref buffer (+ offset (* i 2))) (ash word -8)
-                          (aref buffer (+ offset (* i 2) 1)) (logand word #xFF))
-                 finally (return (+ offset 16))))
-    ((:ns :cname :ptr) (encode-name rdata buffer offset))
-    (t (loop for i from 0 below (length rdata)
-             do (setf (aref buffer (+ offset i)) (if (integerp (elt rdata i))
-                                                      (elt rdata i)
-                                                      (char-code (elt rdata i))))
-             finally (return (+ offset (length rdata)))))))
-(defun decode-name (buffer offset)
-  "Decode a domain name from a DNS packet buffer, following compression pointers."
-  (let ((parts nil)
-        (jumped nil)
-        (return-offset offset))
-    (loop
-      (let ((len (aref buffer offset)))
-        (cond
-          ((zerop len)
-           (incf offset)
-           (unless jumped (setf return-offset offset))
-           (return))
-          ((= (logand len #xC0) #xC0)
-           (let ((ptr (logior (ash (logand len #x3F) 8) (aref buffer (1+ offset)))))
-             (unless jumped
-               (setf return-offset (+ offset 2)))
-             (setf offset ptr jumped t)))
-          (t
-           (incf offset)
-           (push (map 'string #'code-char (subseq buffer offset (+ offset len))) parts)
-           (incf offset len)))))
-    (values (format nil "~{~A~^.~}" (nreverse parts)) return-offset)))
-(defun encode-name (name buffer offset &optional compression-table)
-  "Encode a domain name using DNS label compression into a buffer."
-  (declare (ignore compression-table))
-  (let ((labels (split-sequence:split-sequence #\. name :remove-empty-subseqs t)))
-    (dolist (label labels)
-      (let ((len (length label)))
-        (setf (aref buffer offset) len)
-        (incf offset)
-        (loop for ch across label do
-          (setf (aref buffer offset) (char-code ch))
-          (incf offset))))
-    (setf (aref buffer offset) 0)
-    (incf offset)
-    offset))
-(defclass dns-message ()
-  ((header :initarg :header :accessor message-header :initform (make-instance 'dns-header))
-   (questions :initarg :questions :accessor message-questions :initform nil)
-   (answers :initarg :answers :accessor message-answers :initform nil)
-   (authority :initarg :authority :accessor message-authority :initform nil)
-   (additional :initarg :additional :accessor message-additional :initform nil))
-  (:documentation "Complete DNS message: header, questions, answers, authority, additional sections."))
-(defclass dns-rr ()
-  ((name :initarg :name :accessor rr-name)
-   (type :initarg :type :accessor rr-type)
-   (class :initarg :class :accessor rr-class :initform :in)
-   (ttl :initarg :ttl :accessor rr-ttl :initform 0)
-   (rdata :initarg :rdata :accessor rr-rdata))
-  (:documentation "DNS resource record (name, type, class, TTL, rdata)."))
-(defclass dns-question ()
-  ((qname :initarg :qname :accessor question-qname)
-   (qtype :initarg :qtype :accessor question-qtype)
-   (qclass :initarg :qclass :accessor question-qclass :initform :in))
-  (:documentation "DNS question section entry (name, type, class)."))
-(defclass dns-header ()
-  ((id :initarg :id :accessor header-id :initform (random 65536))
-   (qr :initarg :qr :accessor header-qr :initform 0)
-   (opcode :initarg :opcode :accessor header-opcode :initform 0)
-   (aa :initarg :aa :accessor header-aa :initform 0)
-   (tc :initarg :tc :accessor header-tc :initform 0)
-   (rd :initarg :rd :accessor header-rd :initform 1)
-   (ra :initarg :ra :accessor header-ra :initform 0)
-   (rcode :initarg :rcode :accessor header-rcode :initform 0)
-   (qdcount :initarg :qdcount :accessor header-qdcount :initform 0)
-   (ancount :initarg :ancount :accessor header-ancount :initform 0)
-   (nscount :initarg :nscount :accessor header-nscount :initform 0)
-   (arcount :initarg :arcount :accessor header-arcount :initform 0))
-  (:documentation "DNS message header (ID, flags, counts)."))
-
-(defun make-opt-rr (&key (udp-size 4096) (do-bit nil))
-  "Build an EDNS0 OPT pseudo-record for inclusion in the additional section."
-  (make-instance 'dns-rr
-    :name ""
-    :type :opt
-    :class udp-size
-    :ttl (if do-bit #x8000 0)
-    :rdata #()))
-
-(defun encode-name-compressed (name buffer offset compression-table)
-  "Encode a domain name with pointer-based compression, deduplicating repeated suffixes."
-  (let ((labels (split-sequence:split-sequence #\. name :remove-empty-subseqs t)))
-    (loop for tail on labels
-          for suffix = (format nil "~{~A~^.~}" tail)
-          for existing = (gethash suffix compression-table)
-          do (when existing
-               ;; Write compression pointer
-               (setf (aref buffer offset) (logior #xC0 (ash existing -8))
-                     (aref buffer (1+ offset)) (logand existing #xFF))
-               (return-from encode-name-compressed (+ offset 2)))
-             ;; Record position for this suffix
-             (setf (gethash suffix compression-table) offset)
-             ;; Write label
-             (let ((label (first tail)))
-               (setf (aref buffer offset) (length label))
-               (incf offset)
-               (loop for ch across label do
-                 (setf (aref buffer offset) (char-code ch))
-                 (incf offset))))
-    ;; Null terminator
-    (setf (aref buffer offset) 0)
-    (1+ offset)))
-
 (defun make-dns-cookie (client-ip server-ip &key server-cookie)
   "Generate a DNS client cookie (8 bytes) and optionally include a server cookie for inclusion in EDNS0 OPT.
 Returns the cookie option data (8-40 bytes): client-cookie || server-cookie."
@@ -304,34 +330,3 @@ Returns the cookie option data (8-40 bytes): client-cookie || server-cookie."
                          (concatenate '(vector (unsigned-byte 8)) client-cookie server-cookie)
                          client-cookie)))
     (encode-edns-options (list (cons 10 cookie-data)))))
-
-(defun encode-edns-options (options)
-  "Encode EDNS0 options into an OPT record's RDATA.
-OPTIONS is an alist of (code . data-bytes)."
-  (let* ((total (loop for opt in options
-                      sum (+ 4 (length (cdr opt)))))
-         (buf (make-array total :element-type '(unsigned-byte 8) :initial-element 0))
-         (pos 0))
-    (dolist (opt options)
-      (let ((code (car opt))
-            (data (cdr opt)))
-        (setf (aref buf pos) (ash code -8)
-              (aref buf (+ pos 1)) (logand code #xFF)
-              (aref buf (+ pos 2)) (ash (length data) -8)
-              (aref buf (+ pos 3)) (logand (length data) #xFF))
-        (incf pos 4)
-        (replace buf data :start1 pos)
-        (incf pos (length data))))
-    buf))
-
-(defun decode-edns-options (rdata)
-  "Parse EDNS0 options from OPT record RDATA. Returns alist of (code . data) pairs."
-  (when (and rdata (> (length rdata) 0))
-    (let ((pos 0) (options nil))
-      (loop while (< (+ pos 4) (length rdata))
-            do (let ((code (logior (ash (aref rdata pos) 8) (aref rdata (+ pos 1))))
-                     (len (logior (ash (aref rdata (+ pos 2)) 8) (aref rdata (+ pos 3)))))
-                 (incf pos 4)
-                 (push (cons code (subseq rdata pos (+ pos len))) options)
-                 (incf pos len)))
-      (nreverse options))))

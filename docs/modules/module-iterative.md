@@ -2,8 +2,6 @@
 
 **Functions:** 2
 
-**Depends on:** cache, protocol
-
 ## Contents
 
 - `*root-servers*`
