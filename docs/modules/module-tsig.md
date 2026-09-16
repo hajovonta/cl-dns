@@ -1,11 +1,10 @@
 # Module: tsig
 
-**Functions:** 4
+**Functions:** 3
 
 ## Contents
 
 - `tsig-sign`
 - `tsig-variables-bytes`
 - `tsig-verify`
-- `tsig-verify"`
 

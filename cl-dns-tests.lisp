@@ -423,6 +423,11 @@
   (is (search "failure" (format nil "~A" cl-dns-tests::c))))
 )
 
+(test root-servers-populated
+  (is (= 13 (length cl-dns::*root-servers*)))
+(is (string= "198.41.0.4" (cdr (first cl-dns::*root-servers*))))
+)
+
 (def-suite :cache :in :cl-dns)
 
 (in-suite :cache)
@@ -616,12 +621,13 @@
 (test resolve-query-building
   (let ((cl-dns-tests::r
        (make-instance 'cl-dns:resolver :nameservers '("1.1.1.1" "8.8.8.8"))))
+  ;; resolver holds the nameservers used when a query is dispatched
+  (is (= 2 (length (cl-dns::resolver-nameservers cl-dns-tests::r))))
   (let ((cl-dns-tests::msg (cl-dns:make-query "test.com" :a :class :in)))
     (is
      (= 1 (cl-dns::header-qdcount (cl-dns::message-header cl-dns-tests::msg))))
     (let ((cl-dns-tests::bytes (cl-dns:encode-message cl-dns-tests::msg)))
-      (is (> (length cl-dns-tests::bytes) 16)))))
-)
+      (is (> (length cl-dns-tests::bytes) 16))))))
 
 (test resolve-cache-type-match
   (let* ((cl-dns-tests::r (make-instance 'cl-dns:resolver))
