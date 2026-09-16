@@ -1036,4 +1036,76 @@
                          cl-dns-tests::rrset))))
 )
 
-;;; Coverage: 37/52 functions tested
+(test decode-rrsig-basic
+  (let ((buf (make-array 64 :element-type '(unsigned-byte 8) :initial-element 0)))
+  (setf (aref buf 0) 0 (aref buf 1) 1)
+  (setf (aref buf 2) 13)
+  (setf (aref buf 3) 2)
+  (setf (aref buf 4) 0 (aref buf 5) 0 (aref buf 6) #x0E (aref buf 7) #x10)
+  (setf (aref buf 8) 1 (aref buf 9) 2 (aref buf 10) 3 (aref buf 11) 4)
+  (setf (aref buf 12) 0 (aref buf 13) 0 (aref buf 14) 0 (aref buf 15) 5)
+  (setf (aref buf 16) (ash 12345 -8) (aref buf 17) (logand 12345 #xFF))
+  (let ((end (cl-dns::encode-name "a.b" buf 18)))
+    (setf (aref buf end) #xDE (aref buf (1+ end)) #xAD)
+    (let ((result (cl-dns::decode-rrsig buf 0 (+ end 2))))
+      (is (= 1 (getf result :type-covered)))
+      (is (= 13 (getf result :algorithm)))
+      (is (= 2 (getf result :labels)))
+      (is (= 3600 (getf result :original-ttl)))
+      (is (= #x01020304 (getf result :expiration)))
+      (is (= 5 (getf result :inception)))
+      (is (= 12345 (getf result :key-tag)))
+      (is (string= "a.b" (getf result :signer)))
+      (is (= 2 (length (getf result :signature))))))))
+
+(test verify-ds-sha384
+  (let* ((dnskey (list :flags 257 :protocol 3 :algorithm 8
+                     :public-key (make-array 48 :element-type '(unsigned-byte 8) :initial-element #x5C)))
+       (buf (make-array 256 :element-type '(unsigned-byte 8) :initial-element 0))
+       (offset (cl-dns::encode-name "example.org" buf 0)))
+  (setf (aref buf offset) 1 (aref buf (+ offset 1)) 1)
+  (incf offset 2)
+  (setf (aref buf offset) 3) (incf offset)
+  (setf (aref buf offset) 8) (incf offset)
+  (replace buf (getf dnskey :public-key) :start1 offset)
+  (incf offset 48)
+  (let* ((expected (ironclad:digest-sequence :sha384 (subseq buf 0 offset)))
+         (ds (list :key-tag 0 :algorithm 8 :digest-type 4 :digest expected)))
+    (is (cl-dns::verify-ds ds dnskey "example.org")))))
+
+(test verify-rrsig-ecdsa-p384-branch
+  ;; Algorithm 14 (ECDSA P-384) drives the secp384r1 branch and key-size=48 path.
+;; With a bogus signature it returns nil (handler-case catches the crypto error),
+;; but exercises digest-name :sha384 selection and the (13 14) case arm.
+(let ((rrsig (list :type-covered 1 :algorithm 14 :labels 2
+                   :original-ttl 300 :expiration 99999 :inception 88888
+                   :key-tag 100 :signer "ex.org"
+                   :signature (make-array 96 :element-type '(unsigned-byte 8) :initial-element 0)))
+      (dnskey (list :flags 257 :protocol 3 :algorithm 14
+                    :public-key (make-array 96 :element-type '(unsigned-byte 8) :initial-element 7)))
+      (rrset (list (make-instance 'cl-dns:dns-rr :name "x.ex.org" :type :a :class :in :ttl 300 :rdata #(1 2 3 4)))))
+  (is (null (cl-dns:verify-rrsig rrsig dnskey rrset)))))
+
+(def-suite :dynamic :in :cl-dns)
+
+(in-suite :dynamic)
+
+(test parse-ixfr-changes-empty
+  ;; empty IXFR answer section yields no changes
+(is (null (cl-dns::parse-ixfr-changes nil))))
+
+(test parse-ixfr-changes-basic
+  ;; IXFR diff stream: SOA(old-serial) delete SOA(new-serial) add.
+;; First SOA toggles to :delete, second SOA toggles to :add.
+(let* ((soa (lambda () (make-instance 'cl-dns:dns-rr :name "z.org" :type :soa :ttl 0 :rdata '(:serial 1))))
+       (del1 (make-instance 'cl-dns:dns-rr :name "old.z.org" :type :a :ttl 300 :rdata "1.1.1.1"))
+       (add1 (make-instance 'cl-dns:dns-rr :name "new.z.org" :type :a :ttl 300 :rdata "3.3.3.3"))
+       (answers (list (funcall soa) del1 (funcall soa) add1))
+       (changes (cl-dns::parse-ixfr-changes answers)))
+  (is (= 2 (length changes)))
+  (is (eq :delete (getf (first changes) :op)))
+  (is (string= "old.z.org" (cl-dns::rr-name (getf (first changes) :rr))))
+  (is (eq :add (getf (second changes) :op)))
+  (is (string= "new.z.org" (cl-dns::rr-name (getf (second changes) :rr))))))
+
+;;; Coverage: 39/53 functions tested

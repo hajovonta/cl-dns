@@ -1,5 +1,19 @@
 (in-package #:cl-dns)
 
+(defun parse-ixfr-changes (answers)
+  "Parse an IXFR answer section into a list of add/delete change operations.
+The stream alternates SOA(old)/deletes/SOA(new)/adds; SOA records toggle the mode."
+  (let ((changes nil)
+        (mode nil))
+    (dolist (rr answers)
+      (cond
+        ((eq :soa (rr-type rr))
+         (setf mode (if (eq mode :delete) :add :delete)))
+        ((eq mode :delete)
+         (push (list :op :delete :rr rr) changes))
+        ((eq mode :add)
+         (push (list :op :add :rr rr) changes))))
+    (nreverse changes)))
 (defun make-update-message (zone updates)
   "Build a DNS UPDATE message (RFC 2136) from a zone and list of update operations.
 Each update is a plist (:op :add/:delete, :name, :type, :ttl, :rdata)."
@@ -81,17 +95,5 @@ Each update is a plist (:op :add/:delete, :name, :type, :ttl, :rdata)."
           (header-nscount (message-header query)) 1)
     (let* ((bytes (encode-message query))
            (resp-bytes (send-query-tcp nameserver bytes :timeout timeout :port port))
-           (resp (decode-message resp-bytes))
-           (answers (message-answers resp))
-           (changes nil)
-           (mode nil))
-      ;; Parse IXFR response: SOA(new), then alternating SOA(old)/deletes/SOA(new)/adds
-      (dolist (rr answers)
-        (cond
-          ((eq :soa (rr-type rr))
-           (setf mode (if (eq mode :delete) :add :delete)))
-          ((eq mode :delete)
-           (push (list :op :delete :rr rr) changes))
-          ((eq mode :add)
-           (push (list :op :add :rr rr) changes))))
-      (nreverse changes))))
+           (resp (decode-message resp-bytes)))
+      (parse-ixfr-changes (message-answers resp)))))
